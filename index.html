@@ -1968,6 +1968,11 @@ function buildGodSamples(){
 }
 
 function buildCourse(track){
+  // racers belong to the course they were made on. Their sample indices mean nothing on
+  // the new one (GOD TRACK has far more samples than a loop), and a stale index read off
+  // the new arrays turns the weather to NaN and the whole frame black, so they go too.
+  removeRacerMeshes();
+  racers = []; player = null;
   disposeWorld();
   world = new THREE.Group();
   scene.add(world);
@@ -2772,11 +2777,33 @@ function buildDistantPeaks(th, b){
   var geos = [];
   var R0 = b.r + (TRACK.god ? 5200 : 3600);
   var snowCol = linArr(th.peak), rockCol = linArr(th.high), baseCol = linArr(th.mid);
+  // how far (x, z) is from the nearest bank of any stretch of river
+  function riverClearance(x, z){
+    var m = 1e9;
+    for (var j=0;j<samples.length;j+=3){
+      var s = samples[j];
+      var d = Math.sqrt((s.x - x)*(s.x - x) + (s.z - z)*(s.z - z)) - Math.max(S.rhP[j], S.rhN[j]);
+      if (d < m) m = d;
+    }
+    return m - sampleSpacing*3;
+  }
   for (var i=0;i<count;i++){
     var a = (i / count) * Math.PI*2 + hash1(i*3.1 + TRACK.key.length) * 0.4;
     var dist = R0 + hash1(i*7.7) * (TRACK.god ? 6000 : 3000);
     var hgt = (TRACK.god ? 2600 : 1300) + hash1(i*1.3) * (TRACK.god ? 4200 : 1800);
     var rad = hgt * (0.9 + hash1(i*5.5)*0.7);
+    // A peak's base is far wider than the gap R0 leaves for it (the noise below takes it
+    // out to ~1.35x rad), and a long course like GOD TRACK fills its bounding box very
+    // unevenly, so a fixed ring distance could stand a mountainside right across the river
+    // (it did, at the Colosseum exit): a wall of rock with no collision that you drove
+    // straight through. Each peak is pushed out along its bearing until its whole base
+    // is clear of every stretch of river.
+    var foot = rad * 1.35 + 400;
+    for (var tries=0; tries<40; tries++){
+      var gap = riverClearance(b.x + Math.cos(a)*dist, b.z + Math.sin(a)*dist);
+      if (gap >= foot) break;
+      dist += foot - gap + 100;
+    }
     var g = new THREE.ConeGeometry(rad, hgt, 18, 8, true);
     var p = g.attributes.position;
     var col = new Float32Array(p.count*3);
@@ -8652,8 +8679,10 @@ function updateWeather(realDt, t){
   WEATHER.flashV = Math.max(0, WEATHER.flashV - realDt * 3.2);
   if (WEATHER.darkT > 0) WEATHER.darkT -= realDt;
   var p = player;
-  var ind = p && samples.length ? S.indoor[p.idx] : 0;
+  if (p && !(p.idx < samples.length)) p = null;
+  var ind = p ? S.indoor[p.idx] : 0;
   WEATHER.indoor += (ind - WEATHER.indoor) * Math.min(1, realDt * 3);
+  if (!isFinite(WEATHER.indoor)) WEATHER.indoor = 0;
   if (TRACK && TRACK.god){
     var u = p ? clamp(S.s[p.idx] / courseLength, 0, 1) : (attract.u || 0);
     WEATHER.u += (u - WEATHER.u) * Math.min(1, realDt * 0.6);
